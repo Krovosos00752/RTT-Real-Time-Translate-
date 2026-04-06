@@ -2,6 +2,8 @@ import threading
 import time
 import tkinter as tk
 from dataclasses import dataclass
+from pathlib import Path
+import shutil
 from tkinter import ttk
 
 import mss
@@ -27,6 +29,48 @@ class ScreenCaptureService:
 
 
 class OCRService:
+    def __init__(self) -> None:
+        self._configure_tesseract_binary()
+
+    def _configure_tesseract_binary(self) -> None:
+        if shutil.which("tesseract"):
+            return
+
+        common_windows_paths = [
+            Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
+            Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
+        ]
+        for path in common_windows_paths:
+            if path.exists():
+                pytesseract.pytesseract.tesseract_cmd = str(path)
+                return
+
+    def diagnose(self, lang: str) -> tuple[bool, str]:
+        try:
+            version = str(pytesseract.get_tesseract_version())
+        except pytesseract.TesseractNotFoundError:
+            return (
+                False,
+                "Tesseract не найден. Проверьте PATH и перезапустите терминал/IDE.",
+            )
+
+        try:
+            langs = pytesseract.get_languages(config="")
+        except Exception:
+            langs = []
+
+        clean_lang = lang.strip() or "eng"
+        if langs and clean_lang not in langs:
+            preview = ", ".join(langs[:8])
+            return (
+                False,
+                f"Tesseract найден ({version}), но язык '{clean_lang}' не установлен. "
+                f"Доступно: {preview}",
+            )
+
+        t_cmd = pytesseract.pytesseract.tesseract_cmd
+        return True, f"Tesseract OK ({version}), cmd={t_cmd}"
+
     def extract_lines(self, image: Image.Image, lang: str = "eng") -> list[OCRLine]:
         data = pytesseract.image_to_data(image, lang=lang, output_type=pytesseract.Output.DICT)
 
@@ -162,10 +206,15 @@ class TranslatorApp:
         if self.running:
             return
 
+        ok, message = self.ocr_service.diagnose(self.ocr_lang.get())
+        if not ok:
+            self._set_status(message)
+            return
+
         self.running = True
         self.start_btn.configure(state=tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL)
-        self.status.set("Запущено")
+        self.status.set(f"Запущено. {message}")
 
         self.worker_thread = threading.Thread(target=self._run_loop, daemon=True)
         self.worker_thread.start()
@@ -218,7 +267,7 @@ class TranslatorApp:
                 self._render_blocks(translated_blocks)
                 self._set_status(f"Обновлено: {time.strftime('%H:%M:%S')}")
             except Exception as exc:
-                self._set_status(f"Ошибка: {exc}")
+                self._set_status(self._format_runtime_error(exc))
 
             time.sleep(self._interval_seconds())
 
@@ -254,6 +303,17 @@ class TranslatorApp:
         if selected < 1 or selected >= monitor_count:
             return 1
         return selected
+
+    def _format_runtime_error(self, exc: Exception) -> str:
+        msg = str(exc)
+        if isinstance(exc, pytesseract.TesseractNotFoundError):
+            return "Tesseract не найден во время OCR. Проверьте PATH и перезапустите приложение."
+        if "Error opening data file" in msg:
+            return (
+                "Tesseract найден, но не может открыть языковые данные. "
+                "Проверьте, что установлен нужный language pack и переменная TESSDATA_PREFIX."
+            )
+        return f"Ошибка: {msg}"
 
 
 def main() -> None:
