@@ -105,6 +105,7 @@ class TranslatorApp:
         self.running = False
         self.worker_thread: threading.Thread | None = None
         self.last_rendered_signature = ""
+        self.monitor_choice = tk.StringVar(value="1")
 
         self._build_ui()
 
@@ -128,17 +129,34 @@ class TranslatorApp:
         self.interval = tk.StringVar(value="1.0")
         ttk.Entry(controls, textvariable=self.interval, width=6).grid(row=0, column=7, sticky=tk.W)
 
+        ttk.Label(controls, text="Монитор:").grid(row=0, column=8, sticky=tk.W, padx=(12, 6))
+        self.monitor_box = ttk.Combobox(
+            controls,
+            textvariable=self.monitor_choice,
+            state="readonly",
+            width=5,
+            values=self._available_monitors(),
+        )
+        self.monitor_box.grid(row=0, column=9, sticky=tk.W)
+        if self.monitor_box["values"]:
+            self.monitor_box.current(0)
+
         self.start_btn = ttk.Button(controls, text="Запустить", command=self.start)
-        self.start_btn.grid(row=0, column=8, padx=(16, 6))
+        self.start_btn.grid(row=0, column=10, padx=(16, 6))
 
         self.stop_btn = ttk.Button(controls, text="Остановить", command=self.stop, state=tk.DISABLED)
-        self.stop_btn.grid(row=0, column=9)
+        self.stop_btn.grid(row=0, column=11)
 
         self.status = tk.StringVar(value="Готово")
         ttk.Label(self.root, textvariable=self.status, padding=(10, 0)).pack(anchor=tk.W)
 
         self.output = tk.Text(self.root, wrap=tk.WORD, font=("Arial", 13))
         self.output.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.output.configure(state=tk.DISABLED)
+
+    def _available_monitors(self) -> list[str]:
+        with mss.mss() as sct:
+            return [str(i) for i in range(1, len(sct.monitors))]
 
     def start(self) -> None:
         if self.running:
@@ -162,7 +180,9 @@ class TranslatorApp:
         while self.running:
             try:
                 with mss.mss() as sct:
-                    monitor = sct.monitors[1]
+                    monitors = sct.monitors
+                    selected_monitor = self._selected_monitor_index(len(monitors))
+                    monitor = monitors[selected_monitor]
                 region = {
                     "left": monitor["left"],
                     "top": monitor["top"],
@@ -211,14 +231,29 @@ class TranslatorApp:
 
     def _render_blocks(self, blocks: list[str]) -> None:
         def update() -> None:
+            self.output.configure(state=tk.NORMAL)
             self.output.delete("1.0", tk.END)
             for i, block in enumerate(blocks, start=1):
                 self.output.insert(tk.END, f"[{i}] {block}\n\n")
+            self.output.configure(state=tk.DISABLED)
 
         self.root.after(0, update)
 
     def _set_status(self, text: str) -> None:
         self.root.after(0, lambda: self.status.set(text))
+
+    def _selected_monitor_index(self, monitor_count: int) -> int:
+        if monitor_count <= 1:
+            return 0
+
+        try:
+            selected = int(self.monitor_choice.get())
+        except ValueError:
+            return 1
+
+        if selected < 1 or selected >= monitor_count:
+            return 1
+        return selected
 
 
 def main() -> None:
